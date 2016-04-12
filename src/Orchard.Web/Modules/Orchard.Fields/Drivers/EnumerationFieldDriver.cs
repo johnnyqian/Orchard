@@ -1,18 +1,23 @@
 ﻿using Orchard.ContentManagement;
 using Orchard.ContentManagement.Drivers;
 using Orchard.ContentManagement.Handlers;
-using Orchard.Fields.Settings;
 using Orchard.Fields.Fields;
+using Orchard.Fields.Settings;
 using Orchard.Localization;
+using Orchard.Tokens;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Orchard.Fields.Drivers {
     public class EnumerationFieldDriver : ContentFieldDriver<EnumerationField> {
         public IOrchardServices Services { get; set; }
         private const string TemplateName = "Fields/Enumeration.Edit";
+        private readonly ITokenizer _tokenizer;
 
-        public EnumerationFieldDriver(IOrchardServices services) {
+        public EnumerationFieldDriver(IOrchardServices services, ITokenizer tokenizer) {
             Services = services;
+            _tokenizer = tokenizer;
             T = NullLocalizer.Instance;
         }
 
@@ -33,12 +38,31 @@ namespace Orchard.Fields.Drivers {
 
         protected override DriverResult Editor(ContentPart part, EnumerationField field, dynamic shapeHelper) {
             return ContentShape("Fields_Enumeration_Edit", GetDifferentiator(field, part),
-                () => shapeHelper.EditorTemplate(TemplateName: TemplateName, Model: field, Prefix: GetPrefix(field, part)));
+                () => {
+                    if (field.Value == null) {
+                        var settings = field.PartFieldDefinition.Settings.GetModel<EnumerationFieldSettings>();
+                        if (!String.IsNullOrWhiteSpace(settings.DefaultValue)) {
+                            field.Value = _tokenizer.Replace(settings.DefaultValue, new Dictionary<string, object> { { "Content", part.ContentItem } });
+                        }
+                    }
+
+                    return shapeHelper.EditorTemplate(TemplateName: TemplateName, Model: field, Prefix: GetPrefix(field, part));
+                });
         }
 
         protected override DriverResult Editor(ContentPart part, EnumerationField field, IUpdateModel updater, dynamic shapeHelper) {
             if (updater.TryUpdateModel(field, GetPrefix(field, part), null, null)) {
                 var settings = field.PartFieldDefinition.Settings.GetModel<EnumerationFieldSettings>();
+
+                if (field.SelectedValues.Length == 0 && !String.IsNullOrWhiteSpace(settings.DefaultValue) && !String.IsNullOrWhiteSpace(settings.Options)) {
+                    field.Value = _tokenizer.Replace(settings.DefaultValue, new Dictionary<string, object> { { "Content", part.ContentItem } });
+
+                    string[] options = settings.Options.Split(new string[] { System.Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                    var selectedValues = field.SelectedValues.ToList();
+                    selectedValues.RemoveAll(value => !options.Any(value.Equals));
+                    field.SelectedValues = selectedValues.ToArray();
+                }
+
                 if (settings.Required && field.SelectedValues.Length == 0) {
                     updater.AddModelError(field.Name, T("The field {0} is mandatory", T(field.DisplayName)));
                 }
